@@ -7,6 +7,9 @@ available at http://www.tornadoweb.org/
 Tornado is licensed under the Apache Licence, Version 2.0
 (http://www.apache.org/licenses/LICENSE-2.0.html).
 
+My fork intends to add hooks to request processing enabling someone to
+inspect requests on connect. Then to stream request body if time suits.
+
 Automatic installation
 ----------------------
 
