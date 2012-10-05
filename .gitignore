@@ -3,6 +3,8 @@
 *.so
 *.class
 *~
+.*.swp
+.*.swo
 build/
 /dist/
 MANIFEST
