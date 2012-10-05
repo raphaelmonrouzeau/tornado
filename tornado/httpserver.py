@@ -138,13 +138,22 @@ class HTTPServer(TCPServer):
         self.request_callback = request_callback
         self.no_keep_alive = no_keep_alive
         self.xheaders = xheaders
+        self._events = dict(connect=None, data=None, end=None)
         TCPServer.__init__(self, io_loop=io_loop, ssl_options=ssl_options,
                            **kwargs)
 
     def handle_stream(self, stream, address):
-        HTTPConnection(stream, address, self.request_callback,
-                       self.no_keep_alive, self.xheaders)
+        conn = HTTPConnection(stream, address, self.request_callback,
+                              self.no_keep_alive, self.xheaders)
+        for k,v in self._events.items():
+            conn.on(k,v)
 
+
+    def on(self, name, handler):
+        if name not in self._events:
+            return
+        self._events[name] = handler
+        return self
 
 class _BadRequestException(Exception):
     """Exception class for malformed HTTP requests."""
@@ -171,8 +180,11 @@ class HTTPConnection(object):
         self._header_callback = stack_context.wrap(self._on_headers)
         self.stream.read_until(b("\r\n\r\n"), self._header_callback)
         self._write_callback = None
+        self._events = dict(connect=None, data=None, end=None)
 
     def close(self):
+        if self._events["end"]:
+            self._events["end"](self)
         self.stream.close()
         # Remove this reference to self, which would otherwise cause a
         # cycle and delay garbage collection of this connection.
@@ -224,6 +236,8 @@ class HTTPConnection(object):
         self._request = None
         self._request_finished = False
         if disconnect:
+            if self._events["end"]:
+                self._events["end"](self)
             self.close()
             return
         try:
@@ -232,6 +246,8 @@ class HTTPConnection(object):
             # that it's closed until you try to read from it.
             self.stream.read_until(b("\r\n\r\n"), self._header_callback)
         except iostream.StreamClosedError:
+            if self._events["end"]:
+                self._events["end"](self)
             self.close()
 
     def _on_headers(self, data):
@@ -261,6 +277,9 @@ class HTTPConnection(object):
                 connection=self, method=method, uri=uri, version=version,
                 headers=headers, remote_ip=remote_ip)
 
+            if self._events["connect"]:
+                self._events["connect"](self._request)
+
             content_length = headers.get("Content-Length")
             if content_length:
                 content_length = int(content_length)
@@ -280,12 +299,21 @@ class HTTPConnection(object):
 
     def _on_request_body(self, data):
         self._request.body = data
+
+        if self._events["end"]:
+            self._events["end"](self._request)
+
         if self._request.method in ("POST", "PATCH", "PUT"):
             httputil.parse_body_arguments(
                 self._request.headers.get("Content-Type", ""), data,
                 self._request.arguments, self._request.files)
         self.request_callback(self._request)
 
+    def on(self, name, handler):
+        if name not in self._events:
+            return
+        self._events[name] = handler
+        return self
 
 class HTTPRequest(object):
     """A single HTTP request.
