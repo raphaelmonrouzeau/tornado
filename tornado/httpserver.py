@@ -146,7 +146,11 @@ class HTTPServer(TCPServer):
         conn = HTTPConnection(stream, address, self.request_callback,
                               self.no_keep_alive, self.xheaders)
         for k,v in self._events.items():
-            conn.on(k,v)
+            if v:
+                conn.on(k,v)
+        for k,v in self.request_callback._events.items():
+            if v:
+                conn.on(k,v)
 
 
     def on(self, name, handler):
@@ -183,12 +187,14 @@ class HTTPConnection(object):
         self._events = dict(connect=None, data=None, end=None)
 
     def close(self):
-        if self._events["end"]:
-            self._events["end"](self)
         self.stream.close()
         # Remove this reference to self, which would otherwise cause a
         # cycle and delay garbage collection of this connection.
         self._header_callback = None
+        if self._events["end"] and not self._end_notified:
+            self._end_notified = True
+            self._events["end"](self._old_request)
+            self._old_request = None
 
     def write(self, chunk, callback=None):
         """Writes a chunk of output to the stream."""
@@ -217,7 +223,14 @@ class HTTPConnection(object):
         # _on_write_complete will be responsible for calling
         # _finish_request.
         if self._request_finished and not self.stream.writing():
+            self._please_notify_end_of_request = True
             self._finish_request()
+        else:
+            if self._events["end"] and not self._end_notified:
+                self._end_notified = True
+                self._events["end"](self._old_request)
+                self._old_request = None
+
 
     def _finish_request(self):
         if self.no_keep_alive:
@@ -233,11 +246,10 @@ class HTTPConnection(object):
                 disconnect = connection_header != "keep-alive"
             else:
                 disconnect = True
+        self._old_request = self._request
         self._request = None
         self._request_finished = False
         if disconnect:
-            if self._events["end"]:
-                self._events["end"](self)
             self.close()
             return
         try:
@@ -245,12 +257,17 @@ class HTTPConnection(object):
             # directly, because in some cases the stream doesn't discover
             # that it's closed until you try to read from it.
             self.stream.read_until(b("\r\n\r\n"), self._header_callback)
+            if self._events["end"] and self._please_notify_end_of_request and not self._end_notified:
+                self._end_notified = True
+                self._events["end"](self._old_request)
+                self._old_request = None
         except iostream.StreamClosedError:
-            if self._events["end"]:
-                self._events["end"](self)
             self.close()
 
     def _on_headers(self, data):
+        self._old_request = None
+        self._end_notified = False
+        self._please_notify_end_of_request = False
         try:
             data = native_str(data.decode('latin1'))
             eol = data.find("\r\n")
@@ -280,6 +297,10 @@ class HTTPConnection(object):
             if self._events["connect"]:
                 self._events["connect"](self._request)
 
+            for name,handler in self._events.items():
+                if handler:
+                    self._request.on(name, handler)
+
             content_length = headers.get("Content-Length")
             if content_length:
                 content_length = int(content_length)
@@ -299,9 +320,6 @@ class HTTPConnection(object):
 
     def _on_request_body(self, data):
         self._request.body = data
-
-        if self._events["end"]:
-            self._events["end"](self._request)
 
         if self._request.method in ("POST", "PATCH", "PUT"):
             httputil.parse_body_arguments(
@@ -423,6 +441,7 @@ class HTTPRequest(object):
 
         self.path, sep, self.query = uri.partition('?')
         self.arguments = parse_qs_bytes(self.query, keep_blank_values=True)
+        self._events = dict(connect=None, data=None, end=None)
 
     def supports_http_1_1(self):
         """Returns True if this request supports HTTP/1.1 semantics"""
@@ -506,3 +525,8 @@ class HTTPRequest(object):
                 return False
             raise
         return True
+
+    def on(self, name, handler):
+        if name not in self._events:
+            return
+        self._events[name] = handler

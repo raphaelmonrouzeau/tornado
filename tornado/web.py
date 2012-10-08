@@ -1292,6 +1292,8 @@ class Application(object):
             from tornado import autoreload
             autoreload.start()
 
+        self._events = dict(connect=None, data=None, end=None)
+
     def listen(self, port, address="", **kwargs):
         """Starts an HTTP server for this application on the given port.
 

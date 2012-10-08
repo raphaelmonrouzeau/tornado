@@ -45,8 +45,13 @@ class MainHandler(tornado.web.RequestHandler):
             <input type='submit'>
            </form>
           </body>
-         </html>""")
-    
+         </html><!--""")
+        for i in range(12, 123):
+            self.write(str(i)*i*i)
+        for i in reversed(range(12,123)):
+            self.write(str(i)*i*i)
+        self.write("-->")
+
     def post(self):
         self.write(
          """<html>
@@ -69,7 +74,12 @@ def main():
     http_server.listen(options.port)
     def on_connect(request):
         request.started_at = datetime.datetime.utcnow()
+        print "request finished being received at", request.started_at
+    def on_end(request):
+        request.finished_at = datetime.datetime.utcnow()
+        print "request finished being sent at", request.finished_at
     http_server.on("connect", on_connect)
+    http_server.on("end", on_end)
     tornado.ioloop.IOLoop.instance().start()
 
 
